@@ -1,0 +1,954 @@
+# Database Schema & Metadata
+
+# POLICY_HOLDERS
+
+CREATE TABLE POLICY_HOLDERS (
+    policy_holder_id NUMBER PRIMARY KEY,
+    first_name VARCHAR2(50),
+    last_name VARCHAR2(50),
+    date_of_birth DATE,
+    email VARCHAR2(100),
+    phone_number VARCHAR2(20),
+    address VARCHAR2(200),
+    city VARCHAR2(50),
+    state VARCHAR2(50),
+    zip_code VARCHAR2(10),
+    created_date DATE,
+    updated_date DATE);
+
+# POLICIES
+
+CREATE TABLE POLICIES (
+    policy_id NUMBER PRIMARY KEY,
+    policy_holder_id NUMBER REFERENCES POLICY_HOLDERS(policy_holder_id),
+    policy_type VARCHAR2(50), -- 'AUTO', 'HOME', 'LIFE', 'HEALTH'
+    policy_number VARCHAR2(50) UNIQUE,
+    premium_amount NUMBER(10,2),
+    coverage_amount NUMBER(15,2),
+    start_date DATE,
+    end_date DATE,
+    status VARCHAR2(20), -- 'ACTIVE', 'EXPIRED', 'CANCELLED', 'PENDING'
+    deductible NUMBER(10,2),
+    created_date DATE);
+
+# CLAIMS
+
+CREATE TABLE CLAIMS (
+    claim_id NUMBER PRIMARY KEY,
+    policy_id NUMBER REFERENCES POLICIES(policy_id),
+    claim_date DATE,
+    claim_amount NUMBER(15,2),
+    approved_amount NUMBER(15,2),
+    claim_status VARCHAR2(20), -- 'PENDING', 'APPROVED', 'DENIED', 'UNDER_REVIEW'
+    claim_description VARCHAR2(500),
+    incident_date DATE,
+    reported_date DATE,
+    settlement_date DATE);
+
+# PAYMENTS
+
+CREATE TABLE PAYMENTS (
+    payment_id NUMBER PRIMARY KEY,
+    policy_id NUMBER REFERENCES POLICIES(policy_id),
+    payment_date DATE,
+    payment_amount NUMBER(10,2),
+    payment_method VARCHAR2(20), -- 'CREDIT_CARD', 'DEBIT_CARD', 'BANK_TRANSFER'
+    transaction_id VARCHAR2(100),
+    due_date DATE,
+    status VARCHAR2(20) -- 'PAID', 'PENDING', 'OVERDUE');
+
+
+# AGENTS
+
+CREATE TABLE AGENTS (
+    agent_id NUMBER PRIMARY KEY,
+    first_name VARCHAR2(50),
+    last_name VARCHAR2(50),
+    email VARCHAR2(100),
+    phone_number VARCHAR2(20),
+    hire_date DATE,
+    termination_date DATE,
+    commission_rate NUMBER(5,2));
+
+# POLICY_AGENTS
+
+CREATE TABLE POLICY_AGENTS (
+    policy_id NUMBER REFERENCES POLICIES(policy_id),
+    agent_id NUMBER REFERENCES AGENTS(agent_id),
+    assigned_date DATE,
+    commission_earned NUMBER(10,2),
+    PRIMARY KEY (policy_id, agent_id));
+
+# VEHICLES
+
+CREATE TABLE VEHICLES (
+    vehicle_id NUMBER PRIMARY KEY,
+    policy_id NUMBER REFERENCES POLICIES(policy_id),
+    make VARCHAR2(50),
+    model VARCHAR2(50),
+    year NUMBER,
+    vin VARCHAR2(50),
+    registration_number VARCHAR2(50),
+    current_value NUMBER(10,2));
+
+# PROPERTIES
+
+CREATE TABLE PROPERTIES (
+    property_id NUMBER PRIMARY KEY,
+    policy_id NUMBER REFERENCES POLICIES(policy_id),
+    address VARCHAR2(200),
+    city VARCHAR2(50),
+    state VARCHAR2(50),
+    zip_code VARCHAR2(10),
+    property_type VARCHAR2(50), -- 'SINGLE_FAMILY', 'CONDO', 'APARTMENT'
+    year_built NUMBER,
+    square_feet NUMBER,
+    estimated_value NUMBER(15,2));
+
+# BENEFICIARIES
+
+CREATE TABLE BENEFICIARIES (
+    beneficiary_id NUMBER PRIMARY KEY,
+    policy_id NUMBER REFERENCES POLICIES(policy_id),
+    first_name VARCHAR2(50),
+    last_name VARCHAR2(50),
+    relationship VARCHAR2(50), -- 'SPOUSE', 'CHILD', 'PARENT'
+    percentage NUMBER(5,2),
+    date_of_birth DATE);
+
+# CLAIM_DOCUMENTS
+
+CREATE TABLE CLAIM_DOCUMENTS (
+    document_id NUMBER PRIMARY KEY,
+    claim_id NUMBER REFERENCES CLAIMS(claim_id),
+    document_type VARCHAR2(50), -- 'POLICE_REPORT', 'MEDICAL_BILL', 'ESTIMATE'
+    document_name VARCHAR2(200),
+    upload_date DATE,
+    file_size NUMBER,
+    verified_flag VARCHAR2(1) -- 'Y', 'N');
+
+
+----------------QUERIES----------------
+
+Query 1: Policy Holder Lifetime Value Analysis
+Task: Calculate the lifetime value of each policy holder including premiums, claims, and net profit.
+
+WITH policy_metrics AS (
+    SELECT 
+        ph.policy_holder_id,
+        ph.first_name || ' ' || ph.last_name AS policy_holder_name,
+        COUNT(DISTINCT p.policy_id) AS total_policies,
+        SUM(p.premium_amount) AS total_premiums,
+        SUM(COALESCE(c.claim_amount, 0)) AS total_claimed,
+        SUM(COALESCE(c.approved_amount, 0)) AS total_approved,
+        SUM(p.premium_amount) - SUM(COALESCE(c.approved_amount, 0)) AS net_profit,
+        ROUND((SUM(COALESCE(c.approved_amount, 0)) / NULLIF(SUM(p.premium_amount), 0)) * 100, 2) AS loss_ratio
+    FROM POLICY_HOLDERS ph
+    LEFT JOIN POLICIES p ON ph.policy_holder_id = p.policy_holder_id
+    LEFT JOIN CLAIMS c ON p.policy_id = c.policy_id
+    GROUP BY ph.policy_holder_id, ph.first_name, ph.last_name
+),
+payment_analysis AS (
+    SELECT 
+        p.policy_holder_id,
+        COUNT(pm.payment_id) AS total_payments,
+        SUM(pm.payment_amount) AS total_paid,
+        AVG(pm.payment_amount) AS avg_payment
+    FROM POLICIES p
+    JOIN PAYMENTS pm ON p.policy_id = pm.policy_id
+    WHERE pm.status = 'PAID'
+    GROUP BY p.policy_holder_id
+)
+SELECT 
+    pm.policy_holder_id,
+    pm.policy_holder_name,
+    pm.total_policies,
+    pm.total_premiums,
+    pm.total_claimed,
+    pm.total_approved,
+    pm.net_profit,
+    pm.loss_ratio,
+    COALESCE(pa.total_payments, 0) AS total_payments,
+    COALESCE(pa.total_paid, 0) AS total_paid,
+    CASE 
+        WHEN pm.net_profit > 5000 THEN 'HIGH_VALUE'
+        WHEN pm.net_profit > 1000 THEN 'MEDIUM_VALUE'
+        ELSE 'LOW_VALUE'
+    END AS customer_tier
+FROM policy_metrics pm
+LEFT JOIN payment_analysis pa ON pm.policy_holder_id = pa.policy_holder_id
+ORDER BY pm.net_profit DESC;
+
+Query 2: Agent Performance with Rolling Commission Analysis
+Task: Calculate agent performance with rolling 12-month commission and policy retention rates.
+
+WITH agent_policies AS (
+    SELECT 
+        a.agent_id,
+        a.first_name || ' ' || a.last_name AS agent_name,
+        pa.assigned_date,
+        p.policy_id,
+        p.policy_type,
+        p.status,
+        p.premium_amount,
+        pa.commission_earned,
+        CASE WHEN p.status = 'ACTIVE' THEN 1 ELSE 0 END AS active_flag
+    FROM AGENTS a
+    JOIN POLICY_AGENTS pa ON a.agent_id = pa.agent_id
+    JOIN POLICIES p ON pa.policy_id = p.policy_id
+    WHERE a.termination_date IS NULL
+),
+rolling_commissions AS (
+    SELECT 
+        agent_id,
+        agent_name,
+        EXTRACT(YEAR FROM assigned_date) AS year,
+        EXTRACT(MONTH FROM assigned_date) AS month,
+        SUM(commission_earned) AS monthly_commission,
+        AVG(SUM(commission_earned)) OVER (
+            PARTITION BY agent_id 
+            ORDER BY EXTRACT(YEAR FROM assigned_date), EXTRACT(MONTH FROM assigned_date)
+            ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
+        ) AS rolling_12m_avg_commission
+    FROM agent_policies
+    GROUP BY agent_id, agent_name, EXTRACT(YEAR FROM assigned_date), EXTRACT(MONTH FROM assigned_date)
+),
+retention_metrics AS (
+    SELECT 
+        agent_id,
+        COUNT(DISTINCT policy_id) AS total_policies,
+        SUM(active_flag) AS active_policies,
+        ROUND(SUM(active_flag) * 100.0 / COUNT(DISTINCT policy_id), 2) AS retention_rate
+    FROM agent_policies
+    GROUP BY agent_id
+)
+SELECT 
+    rc.agent_id,
+    rc.agent_name,
+    rc.year,
+    rc.month,
+    rc.monthly_commission,
+    rc.rolling_12m_avg_commission,
+    rm.total_policies,
+    rm.active_policies,
+    rm.retention_rate,
+    CASE 
+        WHEN rm.retention_rate > 80 AND rc.rolling_12m_avg_commission > 5000 THEN 'TOP_PERFORMER'
+        WHEN rm.retention_rate > 60 AND rc.rolling_12m_avg_commission > 2000 THEN 'GOOD_PERFORMER'
+        ELSE 'NEEDS_IMPROVEMENT'
+    END AS performance_tier
+FROM rolling_commissions rc
+JOIN retention_metrics rm ON rc.agent_id = rm.agent_id
+WHERE rc.year = EXTRACT(YEAR FROM SYSDATE)
+ORDER BY rc.rolling_12m_avg_commission DESC;
+
+Query 3: Claim Fraud Detection Pattern Analysis
+Task: Identify potential fraudulent claims based on multiple risk factors and patterns.
+
+WITH claim_patterns AS (
+    SELECT 
+        c.claim_id,
+        p.policy_id,
+        ph.policy_holder_id,
+        ph.first_name || ' ' || ph.last_name AS policy_holder,
+        c.claim_amount,
+        c.approved_amount,
+        c.claim_date,
+        c.incident_date,
+        p.policy_type,
+        -- Risk Factor 1: Claim soon after policy start
+        CASE WHEN c.incident_date - p.start_date <= 30 THEN 1 ELSE 0 END AS early_claim_risk,
+        -- Risk Factor 2: Large claim amount relative to coverage
+        CASE WHEN c.claim_amount > (p.coverage_amount * 0.5) THEN 1 ELSE 0 END AS large_claim_risk,
+        -- Risk Factor 3: Multiple claims in short period
+        (SELECT COUNT(*) FROM CLAIMS c2 
+         WHERE c2.policy_id = c.policy_id 
+         AND c2.claim_date BETWEEN c.claim_date - 180 AND c.claim_date) AS claims_last_6_months,
+        -- Risk Factor 4: Weekend claims (higher fraud probability)
+        CASE WHEN TO_CHAR(c.incident_date, 'DY') IN ('SAT', 'SUN') THEN 1 ELSE 0 END AS weekend_incident,
+        -- Risk Factor 5: Incomplete documentation
+        (SELECT COUNT(*) FROM CLAIM_DOCUMENTS cd 
+         WHERE cd.claim_id = c.claim_id AND cd.verified_flag = 'N') AS unverified_documents
+    FROM CLAIMS c
+    JOIN POLICIES p ON c.policy_id = p.policy_id
+    JOIN POLICY_HOLDERS ph ON p.policy_holder_id = ph.policy_holder_id
+    WHERE c.claim_status IN ('PENDING', 'UNDER_REVIEW')
+),
+risk_scoring AS (
+    SELECT 
+        cp.*,
+        (cp.early_claim_risk * 25 + 
+         cp.large_claim_risk * 25 + 
+         CASE WHEN cp.claims_last_6_months > 2 THEN 25 ELSE 0 END +
+         cp.weekend_incident * 15 +
+         CASE WHEN cp.unverified_documents > 0 THEN 10 ELSE 0 END) AS fraud_risk_score,
+        CASE 
+            WHEN cp.claims_last_6_months > 2 THEN 'MULTIPLE_CLAIMS'
+            WHEN cp.early_claim_risk = 1 THEN 'EARLY_CLAIM'
+            WHEN cp.large_claim_risk = 1 THEN 'LARGE_CLAIM'
+            ELSE 'OTHER'
+        END AS risk_category
+    FROM claim_patterns cp
+)
+SELECT 
+    claim_id,
+    policy_holder,
+    policy_type,
+    claim_amount,
+    approved_amount,
+    fraud_risk_score,
+    risk_category,
+    CASE 
+        WHEN fraud_risk_score >= 60 THEN 'HIGH_RISK'
+        WHEN fraud_risk_score >= 30 THEN 'MEDIUM_RISK'
+        ELSE 'LOW_RISK'
+    END AS risk_level,
+    early_claim_risk,
+    large_claim_risk,
+    claims_last_6_months,
+    weekend_incident,
+    unverified_documents
+FROM risk_scoring
+WHERE fraud_risk_score >= 30
+ORDER BY fraud_risk_score DESC, claim_amount DESC;
+
+Query 4: Policy Renewal Prediction and Revenue Forecasting
+Task: Predict policy renewals and forecast revenue with customer segmentation.
+
+WITH policy_periods AS (
+    SELECT 
+        p.policy_id,
+        p.policy_holder_id,
+        p.policy_type,
+        p.policy_number,
+        p.premium_amount,
+        p.start_date,
+        p.end_date,
+        p.status,
+        LEAD(p.start_date) OVER (PARTITION BY p.policy_holder_id ORDER BY p.start_date) AS next_policy_start,
+        LAG(p.end_date) OVER (PARTITION BY p.policy_holder_id ORDER BY p.start_date) AS prev_policy_end
+    FROM POLICIES p
+),
+renewal_analysis AS (
+    SELECT 
+        pp.*,
+        ph.first_name || ' ' || ph.last_name AS policy_holder,
+        -- Calculate gap between policies
+        CASE 
+            WHEN pp.next_policy_start IS NOT NULL THEN
+                pp.next_policy_start - pp.end_date
+            ELSE NULL
+        END AS renewal_gap_days,
+        -- Renewal prediction based on history
+        CASE 
+            WHEN pp.prev_policy_end IS NOT NULL AND 
+                 (pp.start_date - pp.prev_policy_end) <= 30 THEN 'HIGH_RENEWAL_PROBABILITY'
+            WHEN pp.prev_policy_end IS NOT NULL AND 
+                 (pp.start_date - pp.prev_policy_end) <= 90 THEN 'MEDIUM_RENEWAL_PROBABILITY'
+            ELSE 'LOW_RENEWAL_PROBABILITY'
+        END AS renewal_probability,
+        -- Claim history impact
+        (SELECT COUNT(*) FROM CLAIMS c 
+         WHERE c.policy_id = pp.policy_id 
+         AND c.claim_status = 'APPROVED') AS approved_claims_count,
+        (SELECT SUM(c.approved_amount) FROM CLAIMS c 
+         WHERE c.policy_id = pp.policy_id 
+         AND c.claim_status = 'APPROVED') AS total_claims_amount
+    FROM policy_periods pp
+    JOIN POLICY_HOLDERS ph ON pp.policy_holder_id = ph.policy_holder_id
+),
+revenue_forecast AS (
+    SELECT 
+        policy_holder_id,
+        policy_holder,
+        policy_type,
+        premium_amount,
+        end_date,
+        renewal_probability,
+        approved_claims_count,
+        total_claims_amount,
+        CASE 
+            WHEN renewal_probability = 'HIGH_RENEWAL_PROBABILITY' THEN premium_amount * 0.95
+            WHEN renewal_probability = 'MEDIUM_RENEWAL_PROBABILITY' THEN premium_amount * 0.70
+            ELSE premium_amount * 0.30
+        END AS forecasted_renewal_revenue,
+        CASE 
+            WHEN total_claims_amount > premium_amount * 2 THEN 'HIGH_RISK_CUSTOMER'
+            WHEN total_claims_amount > premium_amount THEN 'MEDIUM_RISK_CUSTOMER'
+            ELSE 'LOW_RISK_CUSTOMER'
+        END AS risk_segment
+    FROM renewal_analysis
+    WHERE status = 'ACTIVE'
+    AND end_date BETWEEN SYSDATE AND ADD_MONTHS(SYSDATE, 3)
+)
+SELECT 
+    policy_holder,
+    policy_type,
+    premium_amount AS current_premium,
+    forecasted_renewal_revenue,
+    ROUND((forecasted_renewal_revenue / premium_amount) * 100, 2) AS renewal_probability_percent,
+    risk_segment,
+    approved_claims_count,
+    total_claims_amount,
+    CASE 
+        WHEN risk_segment = 'HIGH_RISK_CUSTOMER' AND renewal_probability_percent < 50 THEN 'CONSIDER_PREMIUM_INCREASE'
+        WHEN risk_segment = 'LOW_RISK_CUSTOMER' AND renewal_probability_percent > 80 THEN 'OFFER_DISCOUNT'
+        ELSE 'STANDARD_RENEWAL'
+    END AS renewal_strategy
+FROM revenue_forecast
+ORDER BY forecasted_renewal_revenue DESC;
+
+Query 5: Geographic Risk Analysis with Spatial Patterns
+Task: Analyze claim patterns and risks by geographic location.
+
+WITH geographic_claims AS (
+    SELECT 
+        ph.state,
+        ph.city,
+        ph.zip_code,
+        p.policy_type,
+        COUNT(c.claim_id) AS total_claims,
+        SUM(c.claim_amount) AS total_claimed_amount,
+        SUM(c.approved_amount) AS total_approved_amount,
+        COUNT(DISTINCT p.policy_holder_id) AS unique_policy_holders,
+        COUNT(DISTINCT p.policy_id) AS total_policies,
+        AVG(c.claim_amount) AS avg_claim_amount
+    FROM POLICY_HOLDERS ph
+    JOIN POLICIES p ON ph.policy_holder_id = p.policy_holder_id
+    LEFT JOIN CLAIMS c ON p.policy_id = c.policy_id
+    GROUP BY ph.state, ph.city, ph.zip_code, p.policy_type
+),
+premiums_by_region AS (
+    SELECT 
+        ph.state,
+        ph.city,
+        ph.zip_code,
+        p.policy_type,
+        SUM(p.premium_amount) AS total_premiums,
+        COUNT(p.policy_id) AS active_policies
+    FROM POLICY_HOLDERS ph
+    JOIN POLICIES p ON ph.policy_holder_id = p.policy_holder_id
+    WHERE p.status = 'ACTIVE'
+    GROUP BY ph.state, ph.city, ph.zip_code, p.policy_type
+),
+risk_calculation AS (
+    SELECT 
+        gc.state,
+        gc.city,
+        gc.zip_code,
+        gc.policy_type,
+        gc.total_claims,
+        gc.total_claimed_amount,
+        gc.total_approved_amount,
+        gc.unique_policy_holders,
+        gc.total_policies,
+        pr.total_premiums,
+        pr.active_policies,
+        ROUND(gc.total_approved_amount / NULLIF(pr.total_premiums, 0), 3) AS loss_ratio,
+        ROUND(gc.total_claims * 100.0 / NULLIF(pr.active_policies, 0), 2) AS claim_frequency_percent,
+        CASE 
+            WHEN gc.total_approved_amount / NULLIF(pr.total_premiums, 0) > 1.0 THEN 'HIGH_RISK_ZONE'
+            WHEN gc.total_approved_amount / NULLIF(pr.total_premiums, 0) > 0.7 THEN 'MEDIUM_RISK_ZONE'
+            ELSE 'LOW_RISK_ZONE'
+        END AS risk_zone
+    FROM geographic_claims gc
+    JOIN premiums_by_region pr ON gc.state = pr.state 
+        AND gc.city = pr.city 
+        AND gc.zip_code = pr.zip_code 
+        AND gc.policy_type = pr.policy_type
+)
+SELECT 
+    state,
+    city,
+    zip_code,
+    policy_type,
+    total_claims,
+    total_claimed_amount,
+    total_approved_amount,
+    total_premiums,
+    loss_ratio,
+    claim_frequency_percent,
+    risk_zone,
+    RANK() OVER (PARTITION BY policy_type ORDER BY loss_ratio DESC) AS risk_rank,
+    CASE 
+        WHEN risk_zone = 'HIGH_RISK_ZONE' THEN total_premiums * 1.2  -- 20% increase
+        WHEN risk_zone = 'MEDIUM_RISK_ZONE' THEN total_premiums * 1.1  -- 10% increase
+        ELSE total_premiums
+    END AS recommended_premium
+FROM risk_calculation
+WHERE total_policies >= 5  -- Only consider areas with sufficient data
+ORDER BY policy_type, loss_ratio DESC;
+
+Query 6: Customer Churn Prediction with Behavioral Patterns
+Task: Identify customers at high risk of churning based on multiple behavioral factors.
+
+WITH customer_behavior AS (
+    SELECT 
+        ph.policy_holder_id,
+        ph.first_name || ' ' || ph.last_name AS customer_name,
+        ph.created_date AS customer_since,
+        -- Policy metrics
+        COUNT(p.policy_id) AS total_policies_held,
+        SUM(CASE WHEN p.status = 'ACTIVE' THEN 1 ELSE 0 END) AS active_policies,
+        SUM(CASE WHEN p.status IN ('CANCELLED', 'EXPIRED') THEN 1 ELSE 0 END) AS cancelled_policies,
+        -- Payment behavior
+        COUNT(pm.payment_id) AS total_payments,
+        SUM(CASE WHEN pm.status = 'OVERDUE' THEN 1 ELSE 0 END) AS overdue_payments,
+        AVG(pm.payment_amount) AS avg_payment_amount,
+        -- Claim behavior
+        COUNT(c.claim_id) AS total_claims,
+        SUM(CASE WHEN c.claim_status = 'DENIED' THEN 1 ELSE 0 END) AS denied_claims,
+        -- Recent activity
+        MAX(p.start_date) AS latest_policy_start,
+        MONTHS_BETWEEN(SYSDATE, MAX(p.start_date)) AS months_since_last_policy
+    FROM POLICY_HOLDERS ph
+    LEFT JOIN POLICIES p ON ph.policy_holder_id = p.policy_holder_id
+    LEFT JOIN PAYMENTS pm ON p.policy_id = pm.policy_id
+    LEFT JOIN CLAIMS c ON p.policy_id = c.policy_id
+    GROUP BY ph.policy_holder_id, ph.first_name, ph.last_name, ph.created_date
+),
+churn_scoring AS (
+    SELECT 
+        cb.*,
+        -- Churn risk factors (weighted scoring)
+        (CASE WHEN cb.active_policies = 0 THEN 30 ELSE 0 END) +  -- No active policies
+        (CASE WHEN cb.cancelled_policies > cb.active_policies THEN 25 ELSE 0 END) +  -- More cancelled than active
+        (CASE WHEN cb.overdue_payments > 2 THEN 20 ELSE 0 END) +  -- Multiple overdue payments
+        (CASE WHEN cb.denied_claims > 0 THEN 15 ELSE 0 END) +  -- Has denied claims
+        (CASE WHEN cb.months_since_last_policy > 6 THEN 10 ELSE 0 END) AS churn_risk_score,
+        -- Customer value segment
+        CASE 
+            WHEN cb.total_policies_held >= 3 AND cb.overdue_payments = 0 THEN 'HIGH_VALUE'
+            WHEN cb.total_policies_held >= 2 THEN 'MEDIUM_VALUE'
+            ELSE 'LOW_VALUE'
+        END AS customer_value_tier
+    FROM customer_behavior cb
+)
+SELECT 
+    customer_name,
+    customer_since,
+    total_policies_held,
+    active_policies,
+    cancelled_policies,
+    total_payments,
+    overdue_payments,
+    total_claims,
+    denied_claims,
+    months_since_last_policy,
+    churn_risk_score,
+    customer_value_tier,
+    CASE 
+        WHEN churn_risk_score >= 50 THEN 'CRITICAL_RISK'
+        WHEN churn_risk_score >= 30 THEN 'HIGH_RISK'
+        WHEN churn_risk_score >= 15 THEN 'MEDIUM_RISK'
+        ELSE 'LOW_RISK'
+    END AS churn_risk_level,
+    CASE 
+        WHEN churn_risk_score >= 30 AND customer_value_tier = 'HIGH_VALUE' THEN 'IMMEDIATE_RETENTION_EFFORT'
+        WHEN churn_risk_score >= 30 THEN 'RETENTION_CAMPAIGN'
+        WHEN churn_risk_score >= 15 THEN 'PROACTIVE_ENGAGEMENT'
+        ELSE 'STANDARD_MONITORING'
+    END AS recommended_action
+FROM churn_scoring
+WHERE active_policies > 0  -- Only consider customers with active policies
+ORDER BY churn_risk_score DESC, customer_value_tier DESC;
+
+Query 7: Insurance Portfolio Diversification Analysis
+Task: Analyze portfolio diversification and concentration risks across policy types and regions.
+
+WITH portfolio_summary AS (
+    SELECT 
+        p.policy_type,
+        ph.state,
+        ph.city,
+        COUNT(p.policy_id) AS policy_count,
+        SUM(p.premium_amount) AS total_premium,
+        SUM(p.coverage_amount) AS total_coverage,
+        AVG(p.premium_amount) AS avg_premium,
+        COUNT(c.claim_id) AS claim_count,
+        SUM(COALESCE(c.approved_amount, 0)) AS total_claims_paid,
+        COUNT(DISTINCT p.policy_holder_id) AS unique_customers
+    FROM POLICIES p
+    JOIN POLICY_HOLDERS ph ON p.policy_holder_id = p.policy_holder_id
+    LEFT JOIN CLAIMS c ON p.policy_id = c.policy_id AND c.claim_status = 'APPROVED'
+    WHERE p.status = 'ACTIVE'
+    GROUP BY p.policy_type, ph.state, ph.city
+),
+portfolio_metrics AS (
+    SELECT 
+        ps.*,
+        SUM(ps.total_premium) OVER () AS grand_total_premium,
+        SUM(ps.total_premium) OVER (PARTITION BY ps.policy_type) AS policy_type_total_premium,
+        SUM(ps.total_premium) OVER (PARTITION BY ps.state) AS state_total_premium,
+        -- Concentration metrics
+        ROUND(ps.total_premium * 100.0 / SUM(ps.total_premium) OVER (), 3) AS portfolio_percent,
+        ROUND(ps.total_premium * 100.0 / SUM(ps.total_premium) OVER (PARTITION BY ps.policy_type), 3) AS policy_type_percent,
+        ROUND(ps.total_premium * 100.0 / SUM(ps.total_premium) OVER (PARTITION BY ps.state), 3) AS state_percent,
+        -- Risk metrics
+        ROUND(ps.total_claims_paid * 100.0 / NULLIF(ps.total_premium, 0), 3) AS loss_ratio,
+        ROUND(ps.claim_count * 100.0 / ps.policy_count, 2) AS claim_frequency
+    FROM portfolio_summary ps
+),
+risk_assessment AS (
+    SELECT 
+        policy_type,
+        state,
+        city,
+        policy_count,
+        total_premium,
+        total_coverage,
+        portfolio_percent,
+        policy_type_percent,
+        state_percent,
+        loss_ratio,
+        claim_frequency,
+        -- Concentration risk flags
+        CASE WHEN portfolio_percent > 10 THEN 'HIGH_CONCENTRATION' 
+             WHEN portfolio_percent > 5 THEN 'MEDIUM_CONCENTRATION'
+             ELSE 'LOW_CONCENTRATION' 
+        END AS portfolio_concentration,
+        CASE WHEN policy_type_percent > 30 THEN 'HIGH_POLICY_CONCENTRATION' 
+             WHEN policy_type_percent > 15 THEN 'MEDIUM_POLICY_CONCENTRATION'
+             ELSE 'LOW_POLICY_CONCENTRATION' 
+        END AS policy_type_concentration,
+        -- Overall risk rating
+        CASE 
+            WHEN loss_ratio > 80 OR claim_frequency > 25 THEN 'HIGH_RISK'
+            WHEN loss_ratio > 50 OR claim_frequency > 15 THEN 'MEDIUM_RISK'
+            ELSE 'LOW_RISK'
+        END AS risk_category
+    FROM portfolio_metrics
+    WHERE policy_count >= 5  -- Only consider significant segments
+)
+SELECT 
+    policy_type,
+    state,
+    city,
+    policy_count,
+    total_premium,
+    ROUND(total_premium / policy_count, 2) AS avg_premium_per_policy,
+    portfolio_percent,
+    loss_ratio,
+    claim_frequency,
+    portfolio_concentration,
+    policy_type_concentration,
+    risk_category,
+    CASE 
+        WHEN risk_category = 'HIGH_RISK' AND portfolio_concentration = 'HIGH_CONCENTRATION' 
+            THEN 'IMMEDIATE_DIVERSIFICATION_NEEDED'
+        WHEN risk_category = 'HIGH_RISK' OR portfolio_concentration = 'HIGH_CONCENTRATION'
+            THEN 'ACTIVE_DIVERSIFICATION_RECOMMENDED'
+        WHEN risk_category = 'MEDIUM_RISK' AND portfolio_concentration = 'MEDIUM_CONCENTRATION'
+            THEN 'MONITOR_CLOSELY'
+        ELSE 'ACCEPTABLE_RISK'
+    END AS diversification_recommendation
+FROM risk_assessment
+ORDER BY total_premium DESC, risk_category DESC;
+
+Query 8: Claims Processing Efficiency Analysis
+Task: Analyze claims processing efficiency and identify bottlenecks in the claims lifecycle.
+
+WITH claims_timeline AS (
+    SELECT 
+        c.claim_id,
+        p.policy_number,
+        ph.first_name || ' ' || ph.last_name AS policy_holder,
+        p.policy_type,
+        c.claim_date,
+        c.incident_date,
+        c.reported_date,
+        c.settlement_date,
+        c.claim_amount,
+        c.approved_amount,
+        c.claim_status,
+        -- Time metrics
+        c.reported_date - c.incident_date AS days_to_report,
+        c.settlement_date - c.claim_date AS days_to_settle,
+        c.settlement_date - c.reported_date AS processing_days,
+        -- Document metrics
+        (SELECT COUNT(*) FROM CLAIM_DOCUMENTS cd WHERE cd.claim_id = c.claim_id) AS total_documents,
+        (SELECT COUNT(*) FROM CLAIM_DOCUMENTS cd WHERE cd.claim_id = c.claim_id AND cd.verified_flag = 'Y') AS verified_documents,
+        -- Agent metrics
+        (SELECT COUNT(DISTINCT pa.agent_id) FROM POLICY_AGENTS pa WHERE pa.policy_id = p.policy_id) AS agents_involved
+    FROM CLAIMS c
+    JOIN POLICIES p ON c.policy_id = p.policy_id
+    JOIN POLICY_HOLDERS ph ON p.policy_holder_id = ph.policy_holder_id
+    WHERE c.claim_date >= ADD_MONTHS(SYSDATE, -12)
+),
+efficiency_analysis AS (
+    SELECT 
+        ct.*,
+        -- Efficiency scores
+        CASE 
+            WHEN ct.processing_days <= 7 THEN 100
+            WHEN ct.processing_days <= 14 THEN 80
+            WHEN ct.processing_days <= 30 THEN 60
+            WHEN ct.processing_days <= 60 THEN 40
+            ELSE 20
+        END AS processing_efficiency_score,
+        CASE 
+            WHEN ct.verified_documents = ct.total_documents AND ct.total_documents > 0 THEN 100
+            WHEN ct.verified_documents * 1.0 / ct.total_documents >= 0.8 THEN 80
+            WHEN ct.verified_documents * 1.0 / ct.total_documents >= 0.6 THEN 60
+            ELSE 40
+        END AS documentation_score,
+        -- Bottleneck identification
+        CASE 
+            WHEN ct.days_to_report > 30 THEN 'DELAYED_REPORTING'
+            WHEN ct.processing_days > 60 THEN 'SLOW_PROCESSING'
+            WHEN ct.verified_documents * 1.0 / ct.total_documents < 0.5 THEN 'DOCUMENTATION_ISSUES'
+            WHEN ct.agents_involved > 3 THEN 'TOO_MANY_AGENTS'
+            ELSE 'EFFICIENT_PROCESS'
+        END AS bottleneck_type
+    FROM claims_timeline ct
+    WHERE ct.settlement_date IS NOT NULL  -- Only settled claims
+),
+department_performance AS (
+    SELECT 
+        policy_type,
+        COUNT(claim_id) AS total_claims,
+        AVG(processing_days) AS avg_processing_days,
+        AVG(processing_efficiency_score) AS avg_efficiency_score,
+        AVG(documentation_score) AS avg_documentation_score,
+        SUM(claim_amount) AS total_claimed,
+        SUM(approved_amount) AS total_approved,
+        ROUND(SUM(approved_amount) * 100.0 / NULLIF(SUM(claim_amount), 0), 2) AS approval_rate,
+        COUNT(CASE WHEN bottleneck_type != 'EFFICIENT_PROCESS' THEN 1 END) AS inefficient_claims
+    FROM efficiency_analysis
+    GROUP BY policy_type
+)
+SELECT 
+    ea.policy_type,
+    ea.total_claims,
+    ea.avg_processing_days,
+    ea.avg_efficiency_score,
+    ea.avg_documentation_score,
+    ea.total_claimed,
+    ea.total_approved,
+    ea.approval_rate,
+    ea.inefficient_claims,
+    ROUND(ea.inefficient_claims * 100.0 / ea.total_claims, 2) AS inefficiency_rate,
+    CASE 
+        WHEN ea.avg_efficiency_score >= 80 AND ea.inefficiency_rate < 10 THEN 'HIGH_EFFICIENCY'
+        WHEN ea.avg_efficiency_score >= 60 AND ea.inefficiency_rate < 20 THEN 'MEDIUM_EFFICIENCY'
+        ELSE 'LOW_EFFICIENCY'
+    END AS department_efficiency_rating,
+    -- Improvement recommendations
+    CASE 
+        WHEN ea.avg_processing_days > 60 THEN 'IMPLEMENT_FAST_TRACK_PROCESSING'
+        WHEN ea.inefficiency_rate > 30 THEN 'PROCESS_REENGINEERING_NEEDED'
+        WHEN ea.avg_documentation_score < 70 THEN 'DOCUMENTATION_TRAINING_REQUIRED'
+        ELSE 'MAINTAIN_CURRENT_PROCESSES'
+    END AS improvement_recommendation
+FROM department_performance ea
+ORDER BY ea.avg_efficiency_score DESC;
+
+Query 9: Premium Pricing Optimization Model
+Task: Develop a data-driven premium pricing optimization model based on risk factors.
+
+WITH risk_factors AS (
+    SELECT 
+        p.policy_id,
+        p.policy_holder_id,
+        p.policy_type,
+        p.premium_amount,
+        p.coverage_amount,
+        p.deductible,
+        ph.state,
+        ph.city,
+        -- Demographic risk factors
+        MONTHS_BETWEEN(SYSDATE, ph.date_of_birth)/12 AS age,
+        -- Claims history
+        (SELECT COUNT(*) FROM CLAIMS c WHERE c.policy_id = p.policy_id AND c.claim_status = 'APPROVED') AS previous_claims,
+        (SELECT SUM(c.approved_amount) FROM CLAIMS c WHERE c.policy_id = p.policy_id AND c.claim_status = 'APPROVED') AS total_claims_cost,
+        -- Payment behavior
+        (SELECT COUNT(*) FROM PAYMENTS pm WHERE pm.policy_id = p.policy_id AND pm.status = 'OVERDUE') AS overdue_payments,
+        -- Policy tenure
+        MONTHS_BETWEEN(SYSDATE, p.start_date) AS policy_tenure_months,
+        -- Regional risk data
+        (SELECT AVG(c2.claim_amount) FROM CLAIMS c2 
+         JOIN POLICIES p2 ON c2.policy_id = p2.policy_id 
+         JOIN POLICY_HOLDERS ph2 ON p2.policy_holder_id = ph2.policy_holder_id
+         WHERE ph2.city = ph.city AND p2.policy_type = p.policy_type) AS avg_regional_claim
+    FROM POLICIES p
+    JOIN POLICY_HOLDERS ph ON p.policy_holder_id = ph.policy_holder_id
+    WHERE p.status = 'ACTIVE'
+),
+risk_scoring AS (
+    SELECT 
+        rf.*,
+        -- Calculate risk score (0-100)
+        (CASE WHEN rf.age < 25 THEN 20 WHEN rf.age > 65 THEN 15 ELSE 0 END) +
+        (rf.previous_claims * 15) +
+        (CASE WHEN rf.total_claims_cost > rf.premium_amount THEN 20 ELSE 0 END) +
+        (rf.overdue_payments * 10) +
+        (CASE WHEN rf.policy_tenure_months < 12 THEN 10 ELSE 0 END) +
+        (CASE WHEN rf.avg_regional_claim > rf.premium_amount * 2 THEN 15 ELSE 0 END) AS risk_score,
+        -- Current premium adequacy
+        CASE 
+            WHEN rf.total_claims_cost > rf.premium_amount * 1.5 THEN 'UNDER_PRICED'
+            WHEN rf.total_claims_cost < rf.premium_amount * 0.5 THEN 'OVER_PRICED'
+            ELSE 'ADEQUATELY_PRICED'
+        END AS current_pricing_status
+    FROM risk_factors rf
+),
+premium_recommendations AS (
+    SELECT 
+        policy_id,
+        policy_type,
+        state,
+        city,
+        premium_amount AS current_premium,
+        coverage_amount,
+        risk_score,
+        current_pricing_status,
+        -- Recommended premium calculation
+        CASE 
+            WHEN risk_score >= 60 THEN premium_amount * 1.25  -- 25% increase for high risk
+            WHEN risk_score >= 40 THEN premium_amount * 1.15  -- 15% increase for medium-high risk
+            WHEN risk_score >= 20 THEN premium_amount * 1.05  -- 5% increase for medium risk
+            WHEN risk_score < 10 THEN premium_amount * 0.95   -- 5% discount for low risk
+            ELSE premium_amount
+        END AS recommended_premium,
+        -- Risk tier classification
+        CASE 
+            WHEN risk_score >= 60 THEN 'HIGH_RISK'
+            WHEN risk_score >= 40 THEN 'MEDIUM_HIGH_RISK'
+            WHEN risk_score >= 20 THEN 'MEDIUM_RISK'
+            WHEN risk_score >= 10 THEN 'LOW_RISK'
+            ELSE 'VERY_LOW_RISK'
+        END AS risk_tier,
+        previous_claims,
+        total_claims_cost,
+        overdue_payments,
+        policy_tenure_months
+    FROM risk_scoring
+)
+SELECT 
+    policy_id,
+    policy_type,
+    state,
+    city,
+    current_premium,
+    recommended_premium,
+    ROUND(recommended_premium - current_premium, 2) AS premium_adjustment,
+    ROUND((recommended_premium - current_premium) * 100.0 / current_premium, 2) AS adjustment_percent,
+    risk_score,
+    risk_tier,
+    current_pricing_status,
+    previous_claims,
+    total_claims_cost,
+    overdue_payments,
+    policy_tenure_months,
+    CASE 
+        WHEN ABS(recommended_premium - current_premium) / current_premium > 0.15 THEN 'SIGNIFICANT_ADJUSTMENT_NEEDED'
+        WHEN ABS(recommended_premium - current_premium) / current_premium > 0.05 THEN 'MODERATE_ADJUSTMENT_NEEDED'
+        ELSE 'MINOR_ADJUSTMENT_NEEDED'
+    END AS adjustment_priority
+FROM premium_recommendations
+ORDER BY ABS(recommended_premium - current_premium) DESC, risk_score DESC;
+
+Query 10: Comprehensive Business Intelligence Dashboard Query
+Task: Create a comprehensive BI dashboard with multiple KPIs and trend analysis.
+
+WITH monthly_kpis AS (
+    SELECT 
+        TRUNC(c.claim_date, 'MM') AS month_year,
+        p.policy_type,
+        -- Premium metrics
+        SUM(p.premium_amount) AS total_premiums,
+        COUNT(p.policy_id) AS new_policies,
+        -- Claim metrics
+        COUNT(c.claim_id) AS total_claims,
+        SUM(c.claim_amount) AS total_claimed,
+        SUM(c.approved_amount) AS total_approved,
+        -- Payment metrics
+        SUM(pm.payment_amount) AS total_payments_received,
+        COUNT(pm.payment_id) AS successful_payments,
+        -- Customer metrics
+        COUNT(DISTINCT p.policy_holder_id) AS active_customers
+    FROM POLICIES p
+    LEFT JOIN CLAIMS c ON p.policy_id = c.policy_id 
+        AND c.claim_date >= ADD_MONTHS(SYSDATE, -12)
+    LEFT JOIN PAYMENTS pm ON p.policy_id = pm.policy_id 
+        AND pm.payment_date >= ADD_MONTHS(SYSDATE, -12)
+        AND pm.status = 'PAID'
+    WHERE p.start_date >= ADD_MONTHS(SYSDATE, -12)
+    GROUP BY TRUNC(c.claim_date, 'MM'), p.policy_type
+),
+trend_analysis AS (
+    SELECT 
+        mk.month_year,
+        mk.policy_type,
+        mk.total_premiums,
+        mk.total_claims,
+        mk.total_claimed,
+        mk.total_approved,
+        mk.total_payments_received,
+        mk.active_customers,
+        -- Monthly trends
+        LAG(mk.total_premiums) OVER (PARTITION BY mk.policy_type ORDER BY mk.month_year) AS prev_month_premiums,
+        LAG(mk.total_claims) OVER (PARTITION BY mk.policy_type ORDER BY mk.month_year) AS prev_month_claims,
+        -- Growth rates
+        ROUND((mk.total_premiums - LAG(mk.total_premiums) OVER (PARTITION BY mk.policy_type ORDER BY mk.month_year)) * 100.0 / 
+              NULLIF(LAG(mk.total_premiums) OVER (PARTITION BY mk.policy_type ORDER BY mk.month_year), 0), 2) AS premium_growth_rate,
+        ROUND((mk.active_customers - LAG(mk.active_customers) OVER (PARTITION BY mk.policy_type ORDER BY mk.month_year)) * 100.0 / 
+              NULLIF(LAG(mk.active_customers) OVER (PARTITION BY mk.policy_type ORDER BY mk.month_year), 0), 2) AS customer_growth_rate,
+        -- Key ratios
+        ROUND(mk.total_approved * 100.0 / NULLIF(mk.total_premiums, 0), 2) AS loss_ratio,
+        ROUND(mk.total_claims * 100.0 / NULLIF(mk.active_customers, 0), 2) AS claim_frequency
+    FROM monthly_kpis mk
+),
+performance_benchmarks AS (
+    SELECT 
+        ta.*,
+        -- Moving averages for trend smoothing
+        AVG(ta.total_premiums) OVER (PARTITION BY ta.policy_type ORDER BY ta.month_year ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS moving_avg_premiums,
+        AVG(ta.loss_ratio) OVER (PARTITION BY ta.policy_type ORDER BY ta.month_year ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS moving_avg_loss_ratio,
+        -- Performance against benchmarks
+        CASE 
+            WHEN ta.loss_ratio < 40 THEN 'EXCELLENT'
+            WHEN ta.loss_ratio < 60 THEN 'GOOD'
+            WHEN ta.loss_ratio < 80 THEN 'ACCEPTABLE'
+            ELSE 'POOR'
+        END AS loss_ratio_rating,
+        CASE 
+            WHEN ta.premium_growth_rate > 10 THEN 'STRONG_GROWTH'
+            WHEN ta.premium_growth_rate > 5 THEN 'MODERATE_GROWTH'
+            WHEN ta.premium_growth_rate > 0 THEN 'SLOW_GROWTH'
+            ELSE 'DECLINING'
+        END AS growth_rating
+    FROM trend_analysis ta
+)
+SELECT 
+    TO_CHAR(month_year, 'YYYY-MM') AS report_month,
+    policy_type,
+    total_premiums,
+    total_claims,
+    total_approved,
+    total_payments_received,
+    active_customers,
+    premium_growth_rate,
+    customer_growth_rate,
+    loss_ratio,
+    claim_frequency,
+    moving_avg_premiums,
+    moving_avg_loss_ratio,
+    loss_ratio_rating,
+    growth_rating,
+    -- Overall performance score
+    (CASE WHEN loss_ratio_rating = 'EXCELLENT' THEN 25 WHEN loss_ratio_rating = 'GOOD' THEN 20 WHEN loss_ratio_rating = 'ACCEPTABLE' THEN 15 ELSE 5 END) +
+    (CASE WHEN growth_rating = 'STRONG_GROWTH' THEN 25 WHEN growth_rating = 'MODERATE_GROWTH' THEN 20 WHEN growth_rating = 'SLOW_GROWTH' THEN 15 ELSE 5 END) +
+    (CASE WHEN claim_frequency < 5 THEN 25 WHEN claim_frequency < 15 THEN 20 WHEN claim_frequency < 25 THEN 15 ELSE 5 END) +
+    (CASE WHEN total_payments_received >= total_premiums * 0.9 THEN 25 ELSE 10 END) AS performance_score,
+    -- Strategic recommendations
+    CASE 
+        WHEN loss_ratio_rating = 'POOR' AND growth_rating = 'STRONG_GROWTH' THEN 'REVIEW_UNDERWRITING_STANDARDS'
+        WHEN loss_ratio_rating = 'EXCELLENT' AND growth_rating = 'DECLINING' THEN 'AGGRESSIVE_MARKETING_RECOMMENDED'
+        WHEN claim_frequency > 20 THEN 'INVESTIGATE_CLAIM_PATTERNS'
+        WHEN total_payments_received < total_premiums * 0.8 THEN 'IMPROVE_COLLECTION_PROCESSES'
+        ELSE 'MAINTAIN_CURRENT_STRATEGY'
+    END AS strategic_recommendation
+FROM performance_benchmarks
+WHERE month_year >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -6)
+ORDER BY policy_type, month_year DESC;
